@@ -3,8 +3,7 @@
 /**
  * TODO: test the switch for start/stop, code may need to be revised?
  * TODO: test DAC v/oct output
- * TODO: test PWM digital out for velocity
- *          -> will need to add RC filter
+ * TODO: handle MIDI CC 123 (All Notes Off) as a stop?
  */
 
 // MIDI instance must be created in the global scope, not in setup()
@@ -37,7 +36,7 @@ uint8_t                   MIDI_CHAN_DFAM  = 1; // MIDI channel for playing DFAM 
 uint8_t                   MIDI_CHAN_A     = 2; 
 uint8_t                   MIDI_CHAN_B     = 3;
 uint8_t                   LAST_DIV_CV     = 0; // to keep track of clock division/multiplication
-
+uint8_t                   SWITCH_STATE    = 0;
 
 /////////////////////////////////////////////////////////////
 ////////////////// ARDUINO BOILERPLATE //////////////////////
@@ -66,15 +65,51 @@ void setup()
 
   // read the state of the switch to determine if we should 
   // listen to or ignore MIDI start/stop/continue messages
-  SEQ_STATE = digitalRead(PIN_SWITCH) ? Play : Stop;
+  SWITCH_STATE = digitalRead(PIN_SWITCH);
+  SEQ_STATE = SWITCH_STATE ? Play : Stop;
 
   // Initiate MIDI communications, listen to all channels
   MIDI.begin(MIDI_CHANNEL_OMNI);
+
 }
 
+/**
+ * This function will automatically be called repeatedly.
+ * Each time, we check for new MIDI messages and then read the state of the
+ * Teensy's inputs (i.e. the switch).
+ */
 void loop()
 {
   MIDI.read();
+
+  // check on state of switch
+  uint8_t curSwitch = digitalRead(PIN_SWITCH);
+  if (curSwitch == SWITCH_STATE)
+  {
+    return; // nothing has changed, bail immediately
+  }
+  else
+  {
+    handleSwitchStateChange(curSwitch);
+  }
+}
+
+void handleSwitchStateChange(uint8_t newState)
+{
+  #ifdef SERIAL_DEBUG
+  Serial.printf("Switch state changed to: %d\n", newState);
+  #endif
+
+  SWITCH_STATE = newState;
+  if (SWITCH_STATE)
+  {
+    CUR_DFAM_STEP = 0;
+    LAST_STEP = 0;
+  }
+  else
+  {
+    handleStop();
+  }
 }
 
 //////////////////////////////////////////////////
@@ -102,7 +137,11 @@ void burstOfPulses(uint8_t pin, int numPulses)
 ////////////////// MIDI EVENT HANDLERS //////////////////////
 /////////////////////////////////////////////////////////////
 
-// MIDI beat clock is 24 PPQN so this should get called 24 times per step
+/**
+ * Called on every MIDI clock event.
+ * 
+ * MIDI beat clock is 24 PPQN so this should get called 24 times per step
+ */
 void handleClock()
 {
   if (SEQ_STATE == Play)
@@ -123,7 +162,9 @@ void handleClock()
   }
 }
 
-// Called on MIDI "start" message
+/**
+ * Called on every MIDI "start" event.
+ */
 void handleStart()
 {
   #ifdef SERIAL_DEBUG
@@ -144,7 +185,9 @@ void handleStart()
   burstOfPulses(PIN_ADV, stepsLeft);
 }
 
-// Called on MIDI "stop" message
+/**
+ * Called on every MIDI "stop" event.
+ */
 void handleStop()
 {
   #ifdef SERIAL_DEBUG
@@ -164,7 +207,9 @@ void handleStop()
   digitalWrite(LED_BUILTIN, LOW);
 }
 
-// Called on MIDI "continue" message
+/**
+ * Called on every MIDI "Continue" event.
+ */
 void handleContinue()
 {
   #ifdef SERIAL_DEBUG
@@ -175,6 +220,9 @@ void handleContinue()
   SEQ_STATE = Play;
 }
 
+/**
+ * Called for every MIDI CC message
+ */
 void handleCC(uint8_t channel, uint8_t number, uint8_t value)
 {
   #ifdef SERIAL_DEBUG
@@ -200,10 +248,13 @@ void handleCC(uint8_t channel, uint8_t number, uint8_t value)
   }
 }
 
+/**
+ * Called on every MIDI "note on" event.
+ */
 void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
 {
   #ifdef SERIAL_DEBUG
-  Serial.printf("Note on\tCh. %x\tnote=%d (0x%x)\tvel=%x\n", ch, note, note, velocity);
+  Serial.printf("Note on\tCh. %x\tnote=%d (0x%x)\tvel=%d (0x%x)\n", ch, note, note, velocity, velocity);
   #endif
 
   // return immediately if this message is on a channel we don't care about
@@ -212,6 +263,8 @@ void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
 
   if (ch == MIDI_CHAN_DFAM)
   {
+    // check to see if the note being played is one of the eight notes that are
+    // mapped to one of the DFAM's steps
     if (note >= MIDI_ROOT_NOTE && note < MIDI_ROOT_NOTE + NUM_STEPS)
     {
       int stepPlayed = note - MIDI_ROOT_NOTE + 1; // middle c => step one
@@ -219,13 +272,19 @@ void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
       if (stepsLeft < 1)
       {
         stepsLeft += NUM_STEPS;
-      } 
+      }
+
+      // send the velocity
+      analogWrite(PIN_VEL, velocity);
+
+      /** TODO: this sometimes results in the envelopes triggering too early... i.e.
+       *        the envelopes trigger before the pitch info arrives on DFAM's CV input
+       *        (tested using doepfer quantizer) */
+      // advance the DFAM's sequencer and thereby trigger the step 
       burstOfPulses(PIN_ADV, stepsLeft);
       LAST_STEP = stepPlayed;
 
-      // send trigger on trigger out?
-      // send trigger on advance?
-      // send velocity on vel output?
+
     }
   }
 
@@ -243,6 +302,9 @@ void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
   }
 }
 
+/**
+ * Called on every MIDI "note off" event.
+ */
 void handleNoteOff(uint8_t channel, uint8_t note, uint8_t velocity)
 {
   #ifdef SERIAL_DEBUG
