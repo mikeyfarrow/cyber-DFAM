@@ -4,6 +4,7 @@
  * TODO: test the switch for start/stop, code may need to be revised?
  * TODO: test DAC v/oct output
  * TODO: handle MIDI CC 123 (All Notes Off) as a stop?
+ * TODO: when switch goes from on to off, automatically advance the DFAM to the start (call handleStop)
  */
 
 // MIDI instance must be created in the global scope, not in setup()
@@ -70,7 +71,6 @@ void setup()
 
   // Initiate MIDI communications, listen to all channels
   MIDI.begin(MIDI_CHANNEL_OMNI);
-
 }
 
 /**
@@ -84,27 +84,34 @@ void loop()
 
   // check on state of switch
   uint8_t curSwitch = digitalRead(PIN_SWITCH);
-  if (curSwitch == SWITCH_STATE)
-  {
-    return; // nothing has changed, bail immediately
-  }
-  else
+  if (curSwitch != SWITCH_STATE)
   {
     handleSwitchStateChange(curSwitch);
   }
+}
+
+void printStateInfo()
+{
+  #ifdef SERIAL_DEBUG
+  Serial.printf("SEQ_STATE, CLOCK_COUNT, CUR_DFAM_STEP, LAST_STEP, SWITCH_STATE\n");
+  Serial.printf("%d\t\t%d\t\t%d\t\t%d\t\t%d\n", SEQ_STATE, CLOCK_COUNT, CUR_DFAM_STEP, LAST_STEP, SWITCH_STATE);
+  #endif
 }
 
 void handleSwitchStateChange(uint8_t newState)
 {
   #ifdef SERIAL_DEBUG
   Serial.printf("Switch state changed to: %d\n", newState);
+  printStateInfo();
   #endif
 
   SWITCH_STATE = newState;
   if (SWITCH_STATE)
   {
+    SEQ_STATE = Play;
     CUR_DFAM_STEP = 0;
-    LAST_STEP = 0;
+    LAST_STEP = 1;
+    CLOCK_COUNT = 0;
   }
   else
   {
@@ -144,9 +151,9 @@ void burstOfPulses(uint8_t pin, int numPulses)
  */
 void handleClock()
 {
-  if (SEQ_STATE == Play)
+  if (SEQ_STATE == Play && SWITCH_STATE)
   {
-    // only count clock pulses while sequence is playing
+    // only count clock pulses while sequence is playing and mode is selected
     CLOCK_COUNT =  CLOCK_COUNT % PULSES_PER_STEP + 1;
 
     if (CLOCK_COUNT == 1) // we have a new step
@@ -171,18 +178,21 @@ void handleStart()
   Serial.println("Started");
   #endif
 
-  digitalWrite(LED_BUILTIN, HIGH);
+  if (SWITCH_STATE)
+  {
+    digitalWrite(LED_BUILTIN, HIGH);
 
-  // if we are on step 1 (or 0), advance the sequencer all the way around
-  // otherwise just advance it by however many steps away from step one
-  int stepsLeft = CUR_DFAM_STEP > 1
-                      ? NUM_STEPS - CUR_DFAM_STEP
-                      : NUM_STEPS - 1;
-  SEQ_STATE = Play;
-  CLOCK_COUNT = 0;
-  CUR_DFAM_STEP = 0;
+    // if we are on step 1 (or 0), advance the sequencer all the way around
+    // otherwise just advance it by however many steps away from step one
+    int stepsLeft = CUR_DFAM_STEP > 1
+                        ? NUM_STEPS - CUR_DFAM_STEP
+                        : NUM_STEPS - 1;
+    SEQ_STATE = Play;
+    CLOCK_COUNT = 0;
+    CUR_DFAM_STEP = 0;
 
-  burstOfPulses(PIN_ADV, stepsLeft);
+    burstOfPulses(PIN_ADV, stepsLeft);
+  }
 }
 
 /**
@@ -200,7 +210,7 @@ void handleStop()
     // if we get a STOP when it is already stopped
     // give the DFAM sequencer a chance to re-sync
     CUR_DFAM_STEP = 0;
-    LAST_STEP = 0;
+    LAST_STEP = 1;
   }
 
   SEQ_STATE = Stop;
@@ -228,6 +238,12 @@ void handleCC(uint8_t channel, uint8_t number, uint8_t value)
   #ifdef SERIAL_DEBUG
   Serial.printf("CC received\tChannel=%x\tnum=%x\tval=%x\n", channel, number, value);
   #endif
+
+  if (number == 123)
+  {
+    handleStop();
+    return;
+  }
 
   if (number == CLOCK_MULT_CC)
   {
@@ -261,7 +277,7 @@ void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
   if (ch != MIDI_CHAN_DFAM && ch != MIDI_CHAN_A && ch != MIDI_CHAN_B)
     return;
 
-  if (ch == MIDI_CHAN_DFAM)
+  if (ch == MIDI_CHAN_DFAM && !SWITCH_STATE)
   {
     // check to see if the note being played is one of the eight notes that are
     // mapped to one of the DFAM's steps
