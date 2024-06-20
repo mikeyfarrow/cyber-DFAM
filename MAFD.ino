@@ -5,6 +5,7 @@
 
 /**
  * TODO: test DAC v/oct output
+ * TODO: is it better/faster/more consistent to use PWM instead of burstOfPulses?
  */
 
 // MIDI instance must be created in the global scope, not in setup()
@@ -21,7 +22,6 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 /**** Global CONSTANTS ****/
 #define NUM_STEPS 8
 #define PPQN 24
-#define CC_CLOCK_MULT 0x46 // a random CC digitakt happens to send
 #define CC_ALL_NOTES_OFF 123
 #define MIDI_ROOT_NOTE 48  // 0x30, an octave below middle C
 
@@ -39,7 +39,6 @@ int PULSES_PER_STEP = PPQN / CLOCK_DIV;
 uint8_t MIDI_CHAN_DFAM = 1; // MIDI channel for playing DFAM in "8-voice mono-synth" mode
 uint8_t MIDI_CHAN_A = 2;
 uint8_t MIDI_CHAN_B = 3;
-uint8_t LAST_DIV_CV = 0; // to keep track of clock division/multiplication
 uint8_t SWITCH_STATE = -1;
 
 /////////////////////////////////////////////////////////////
@@ -118,7 +117,6 @@ void checkModeSwitch()
    }
    else
    {
-      CUR_DFAM_STEP = 1;
       handleStop();
    }
 }
@@ -245,24 +243,6 @@ void handleCC(uint8_t channel, uint8_t number, uint8_t value)
       handleStop();
       return;
    }
-
-  //  if (number == CC_CLOCK_MULT)
-  //  {
-  //     uint8_t prev = LAST_DIV_CV;
-  //     LAST_DIV_CV = value;
-  //     if (LAST_DIV_CV > prev)
-  //     {
-  //        CLOCK_DIV *= 2;
-  //     }
-  //     else
-  //     {
-  //        CLOCK_DIV /= 2;
-  //     }
-  //     CLOCK_DIV = min(64, CLOCK_DIV);
-  //     CLOCK_DIV = max(1, CLOCK_DIV);
-  //     PULSES_PER_STEP = PPQN / CLOCK_DIV;
-  //     Serial.printf("Previous div=%x\tCurrent div=%d\n", prev, CLOCK_DIV);
-  //  }
 }
 
 /**
