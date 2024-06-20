@@ -1,5 +1,8 @@
 #include <MIDI.h>
 
+// uncomment the following line to run with print statements
+#define SERIAL_DEBUG
+
 /**
  * TODO: test the switch for start/stop, code may need to be revised?
  * TODO: test DAC v/oct output
@@ -23,16 +26,14 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 #define PPQN           24
 #define CLOCK_MULT_CC  0x46 // a random CC digitakt happens to send
 #define MIDI_ROOT_NOTE 48   // 0x30, an octave below middle C
-#define SERIAL_DEBUG        // remove this to run without print statements
 
 /**************************/
 /**** Global VARIABLES ****/
 enum State { Play, Stop } SEQ_STATE       = Stop;
 int                       CLOCK_COUNT     = 0;
-int                       CUR_DFAM_STEP   = 0;
+int                       CUR_DFAM_STEP   = 0; // the number of the last DFAM step triggered
 int                       CLOCK_DIV       = 4;
 int                       PULSES_PER_STEP = PPQN / CLOCK_DIV;
-int                       LAST_STEP       = 1; // last step of the sequencer when in midi trigger mode
 uint8_t                   MIDI_CHAN_DFAM  = 1; // MIDI channel for playing DFAM in "8-voice mono-synth" mode
 uint8_t                   MIDI_CHAN_A     = 2; 
 uint8_t                   MIDI_CHAN_B     = 3;
@@ -47,6 +48,8 @@ void setup()
   #ifdef SERIAL_DEBUG
   while (!Serial) ;
   #endif
+
+  Serial.println("Yo");
 
   // attach MIDI event callback functions
   MIDI.setHandleStart(handleStart);
@@ -68,6 +71,7 @@ void setup()
   // listen to or ignore MIDI start/stop/continue messages
   SWITCH_STATE = digitalRead(PIN_SWITCH);
   SEQ_STATE = SWITCH_STATE ? Play : Stop;
+  CUR_DFAM_STEP = SWITCH_STATE ? 0 : 1;
 
   // Initiate MIDI communications, listen to all channels
   MIDI.begin(MIDI_CHANNEL_OMNI);
@@ -86,19 +90,19 @@ void loop()
   uint8_t curSwitch = digitalRead(PIN_SWITCH);
   if (curSwitch != SWITCH_STATE)
   {
-    handleSwitchStateChange(curSwitch);
+    handleModeSwitch(curSwitch);
   }
 }
 
 void printStateInfo()
 {
   #ifdef SERIAL_DEBUG
-  Serial.printf("SEQ_STATE, CLOCK_COUNT, CUR_DFAM_STEP, LAST_STEP, SWITCH_STATE\n");
-  Serial.printf("%d\t\t%d\t\t%d\t\t%d\t\t%d\n", SEQ_STATE, CLOCK_COUNT, CUR_DFAM_STEP, LAST_STEP, SWITCH_STATE);
+  Serial.printf("\t\t\t\tSEQ_STATE, CLOCK_COUNT, CUR_DFAM_STEP, SWITCH_STATE\n");
+  Serial.printf("\t\t\t\t%d\t\t%d\t\t%d\t%d\n", SEQ_STATE, CLOCK_COUNT, CUR_DFAM_STEP, SWITCH_STATE);
   #endif
 }
 
-void handleSwitchStateChange(uint8_t newState)
+void handleModeSwitch(uint8_t newState)
 {
   #ifdef SERIAL_DEBUG
   Serial.printf("Switch state changed to: %d\n", newState);
@@ -108,25 +112,19 @@ void handleSwitchStateChange(uint8_t newState)
   SWITCH_STATE = newState;
   if (SWITCH_STATE)
   {
+    int stepsLeft = stepsBetween(CUR_DFAM_STEP, 1) + 1;
+    burstOfPulses(PIN_ADV, stepsLeft);
     SEQ_STATE = Play;
     CUR_DFAM_STEP = 0;
-    LAST_STEP = 1;
     CLOCK_COUNT = 0;
-    int stepsLeft = NUM_STEPS - LAST_STEP;
-    if (stepsLeft < 1)
-    {
-      stepsLeft += NUM_STEPS;
-    }
-    burstOfPulses(PIN_ADV, stepsLeft);
   }
   else
   {
-    int stepsLeft = CUR_DFAM_STEP > 1
-                        ? NUM_STEPS - CUR_DFAM_STEP
-                        : NUM_STEPS - 1;
-    CUR_DFAM_STEP = 0;
-    LAST_STEP = 1;
-    burstOfPulses(PIN_ADV, stepsLeft + 1);
+    int stepsLeft = stepsBetween(CUR_DFAM_STEP, 1) + 1;
+    burstOfPulses(PIN_ADV, stepsLeft);
+
+    CUR_DFAM_STEP = 1;
+    CLOCK_COUNT = 0;
     handleStop();
   }
 }
@@ -194,11 +192,7 @@ void handleStart()
   {
     digitalWrite(LED_BUILTIN, HIGH);
 
-    // if we are on step 1 (or 0), advance the sequencer all the way around
-    // otherwise just advance it by however many steps away from step one
-    int stepsLeft = CUR_DFAM_STEP > 1
-                        ? NUM_STEPS - CUR_DFAM_STEP
-                        : NUM_STEPS - 1;
+    int stepsLeft = stepsBetween(CUR_DFAM_STEP, 1);
     SEQ_STATE = Play;
     CLOCK_COUNT = 0;
     CUR_DFAM_STEP = 0;
@@ -218,11 +212,13 @@ void handleStop()
 
   if (SEQ_STATE == Stop)
   { 
+    #ifdef SERIAL_DEBUG
+    Serial.println("Stopped again, resetting state");
+    #endif
     // reset the state of the sequencer
     // if we get a STOP when it is already stopped
     // give the DFAM sequencer a chance to re-sync
-    CUR_DFAM_STEP = 0;
-    LAST_STEP = 1;
+    CUR_DFAM_STEP = digitalRead(PIN_SWITCH) ? 0 : 1;
   }
 
   SEQ_STATE = Stop;
@@ -277,12 +273,29 @@ void handleCC(uint8_t channel, uint8_t number, uint8_t value)
 }
 
 /**
+ * returns the number of steps the DFAM sequencer would need
+ * to advance to get from start to end 
+ */
+int stepsBetween(int start, int end)
+{
+  if (start == 0 || start == end)
+    return NUM_STEPS - 1;
+  
+  int stepsLeft = end - start - 1;
+  if (end < start)
+    stepsLeft += NUM_STEPS;
+
+  return stepsLeft;
+}
+
+/**
  * Called on every MIDI "note on" event.
  */
 void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
 {
   #ifdef SERIAL_DEBUG
   Serial.printf("Note on\tCh. %x\tnote=%d (0x%x)\tvel=%d (0x%x)\n", ch, note, note, velocity, velocity);
+  printStateInfo();
   #endif
 
   // return immediately if this message is on a channel we don't care about
@@ -291,16 +304,10 @@ void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
 
   if (ch == MIDI_CHAN_DFAM && !SWITCH_STATE)
   {
-    // check to see if the note being played is one of the eight notes that are
-    // mapped to one of the DFAM's steps
     if (note >= MIDI_ROOT_NOTE && note < MIDI_ROOT_NOTE + NUM_STEPS)
     {
       int stepPlayed = note - MIDI_ROOT_NOTE + 1; // middle c => step one
-      int stepsLeft = stepPlayed - LAST_STEP;
-      if (stepsLeft < 1)
-      {
-        stepsLeft += NUM_STEPS;
-      }
+      int stepsLeft = stepsBetween(CUR_DFAM_STEP, stepPlayed);
 
       // send the velocity
       analogWrite(PIN_VEL, velocity);
@@ -308,9 +315,11 @@ void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
       /** TODO: this sometimes results in the envelopes triggering too early... i.e.
        *        the envelopes trigger before the pitch info arrives on DFAM's CV input
        *        (tested using doepfer quantizer) */
-      // advance the DFAM's sequencer and thereby trigger the step 
+
+      // advance the DFAM's sequencer and then trigger the step 
       burstOfPulses(PIN_ADV, stepsLeft);
-      LAST_STEP = stepPlayed;
+      sendPulse(PIN_ADV);
+      CUR_DFAM_STEP = stepPlayed;
     }
   }
 
