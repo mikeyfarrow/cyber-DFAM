@@ -4,7 +4,7 @@
  * TODO: test the switch for start/stop, code may need to be revised?
  * TODO: test DAC v/oct output
  * TODO: handle MIDI CC 123 (All Notes Off) as a stop?
- * TODO: when switch goes from on to off, automatically advance the DFAM to the start (call handleStop)
+ * TODO: switching from off to on should reset the step back to one
  */
 
 // MIDI instance must be created in the global scope, not in setup()
@@ -112,9 +112,21 @@ void handleSwitchStateChange(uint8_t newState)
     CUR_DFAM_STEP = 0;
     LAST_STEP = 1;
     CLOCK_COUNT = 0;
+    int stepsLeft = NUM_STEPS - LAST_STEP;
+    if (stepsLeft < 1)
+    {
+      stepsLeft += NUM_STEPS;
+    }
+    burstOfPulses(PIN_ADV, stepsLeft);
   }
   else
   {
+    int stepsLeft = CUR_DFAM_STEP > 1
+                        ? NUM_STEPS - CUR_DFAM_STEP
+                        : NUM_STEPS - 1;
+    CUR_DFAM_STEP = 0;
+    LAST_STEP = 1;
+    burstOfPulses(PIN_ADV, stepsLeft + 1);
     handleStop();
   }
 }
@@ -299,8 +311,6 @@ void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
       // advance the DFAM's sequencer and thereby trigger the step 
       burstOfPulses(PIN_ADV, stepsLeft);
       LAST_STEP = stepPlayed;
-
-
     }
   }
 
