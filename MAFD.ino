@@ -34,13 +34,13 @@ enum State
 } SEQ_STATE = Stop;
 int CLOCK_COUNT = 0;
 int CUR_DFAM_STEP = 0; // the number of the last DFAM step triggered
-int CLOCK_DIV = 1;
+int CLOCK_DIV = 4;
 int PULSES_PER_STEP = PPQN / CLOCK_DIV;
 uint8_t MIDI_CHAN_DFAM = 1; // MIDI channel for playing DFAM in "8-voice mono-synth" mode
 uint8_t MIDI_CHAN_A = 2;
 uint8_t MIDI_CHAN_B = 3;
 uint8_t LAST_DIV_CV = 0; // to keep track of clock division/multiplication
-uint8_t SWITCH_STATE = 0;
+uint8_t SWITCH_STATE = -1;
 
 /////////////////////////////////////////////////////////////
 ////////////////// ARDUINO BOILERPLATE //////////////////////
@@ -67,12 +67,9 @@ void setup()
    pinMode(PIN_ADV, OUTPUT);
    pinMode(PIN_VOCT, OUTPUT);
    pinMode(PIN_VEL, OUTPUT);
-
-   // read the state of the switch to determine if we should
-   // listen to or ignore MIDI start/stop/continue messages
-   SWITCH_STATE = digitalRead(PIN_SWITCH);
-   SEQ_STATE = SWITCH_STATE ? Play : Stop;
-   CUR_DFAM_STEP = SWITCH_STATE ? 0 : 1;
+   
+   // read the switch to determine what mode we start in
+   checkModeSwitch();
 
    // Initiate MIDI communications, listen to all channels
    MIDI.begin(MIDI_CHANNEL_OMNI);
@@ -116,7 +113,7 @@ void checkModeSwitch()
 
    if (SWITCH_STATE)
    {
-      // SEQ_STATE = Play;
+      SEQ_STATE = Play;
       CUR_DFAM_STEP = 0;
    }
    else
