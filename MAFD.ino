@@ -23,19 +23,15 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 #define NUM_STEPS 8
 #define PPQN 24
 #define CC_ALL_NOTES_OFF 123
-#define MIDI_ROOT_NOTE 48  // 0x30, an octave below middle C
+#define MIDI_ROOT_NOTE 48  // an octave below middle C
 
 /**************************/
 /**** Global VARIABLES ****/
-enum State
-{
-   Play,
-   Stop
-} SEQ_STATE = Stop;
-int CLOCK_COUNT = 0;
-int CUR_DFAM_STEP = 0; // the number of the last DFAM step triggered
-int CLOCK_DIV = 4;
-int PULSES_PER_STEP = PPQN / CLOCK_DIV;
+bool    FOLLOW_MIDI_CLOCK = false;
+uint8_t CLOCK_COUNT = 0;
+uint8_t CUR_DFAM_STEP = 0; // the number of the last DFAM step triggered
+uint8_t CLOCK_DIV = 4;
+uint8_t PULSES_PER_STEP = PPQN / CLOCK_DIV;
 uint8_t MIDI_CHAN_DFAM = 1; // MIDI channel for playing DFAM in "8-voice mono-synth" mode
 uint8_t MIDI_CHAN_A = 2;
 uint8_t MIDI_CHAN_B = 3;
@@ -58,7 +54,6 @@ void setup()
    MIDI.setHandleClock(handleClock);
    MIDI.setHandleControlChange(handleCC);
    MIDI.setHandleNoteOn(handleNoteOn);
-   MIDI.setHandleNoteOff(handleNoteOff);
 
    // configue GPIO pins
    pinMode(LED_BUILTIN, OUTPUT);
@@ -88,8 +83,8 @@ void loop()
 void printStateInfo()
 {
 #ifdef SERIAL_DEBUG
-   Serial.printf("\t\t\t\tSEQ_STATE, CLOCK_COUNT, CUR_DFAM_STEP, SWITCH_STATE\n");
-   Serial.printf("\t\t\t\t%d\t\t%d\t\t%d\t%d\n", SEQ_STATE, CLOCK_COUNT, CUR_DFAM_STEP, SWITCH_STATE);
+   Serial.printf("\t\t\t\tFOLLOW_MIDI_CLOCK, CLOCK_COUNT, CUR_DFAM_STEP, SWITCH_STATE\n");
+   Serial.printf("\t\t\t\t%d\t\t%d\t\t%d\t%d\n", FOLLOW_MIDI_CLOCK, CLOCK_COUNT, CUR_DFAM_STEP, SWITCH_STATE);
 #endif
 }
 
@@ -112,7 +107,7 @@ void checkModeSwitch()
 
    if (SWITCH_STATE)
    {
-      SEQ_STATE = Play;
+      FOLLOW_MIDI_CLOCK = true;
       CUR_DFAM_STEP = 0;
    }
    else
@@ -153,7 +148,7 @@ void burstOfPulses(uint8_t pin, int numPulses)
  */
 void handleClock()
 {
-   if (SEQ_STATE == Play && SWITCH_STATE)
+   if (FOLLOW_MIDI_CLOCK && SWITCH_STATE)
    {
       // only count clock pulses while sequence is playing and mode is selected
       CLOCK_COUNT = CLOCK_COUNT % PULSES_PER_STEP + 1;
@@ -186,7 +181,7 @@ void handleStart()
 
       int stepsLeft = stepsBetween(CUR_DFAM_STEP, 1);
       burstOfPulses(PIN_ADV, stepsLeft);
-      SEQ_STATE = Play;
+      FOLLOW_MIDI_CLOCK = true;
       CLOCK_COUNT = 0;
       CUR_DFAM_STEP = 0;
    }
@@ -201,7 +196,7 @@ void handleStop()
    Serial.println("Stopped");
 #endif
 
-   if (SEQ_STATE == Stop)
+   if (!FOLLOW_MIDI_CLOCK)
    {
 #ifdef SERIAL_DEBUG
       Serial.println("Stopped again, resetting state");
@@ -212,7 +207,7 @@ void handleStop()
       CUR_DFAM_STEP = digitalRead(PIN_SWITCH) ? 0 : 1;
    }
 
-   SEQ_STATE = Stop;
+   FOLLOW_MIDI_CLOCK = false;
    digitalWrite(LED_BUILTIN, LOW);
 }
 
@@ -226,7 +221,7 @@ void handleContinue()
 #endif
 
    digitalWrite(LED_BUILTIN, HIGH);
-   SEQ_STATE = Play;
+   FOLLOW_MIDI_CLOCK = true;
 }
 
 /**
@@ -246,8 +241,8 @@ void handleCC(uint8_t channel, uint8_t number, uint8_t value)
 }
 
 /**
- * returns the number of steps the DFAM sequencer would need
- * to advance to get from start to end
+ * returns the number of steps the DFAM sequencer would need to advance to get
+ * from start to end
  */
 int stepsBetween(int start, int end)
 {
@@ -305,14 +300,4 @@ void handleNoteOn(uint8_t ch, uint8_t note, uint8_t velocity)
    if (ch == MIDI_CHAN_B)
    {
    }
-}
-
-/**
- * Called on every MIDI "note off" event.
- */
-void handleNoteOff(uint8_t channel, uint8_t note, uint8_t velocity)
-{
-#ifdef SERIAL_DEBUG
-// Serial.printf("Note off\tChannel=%x\tnote=%x\tvel=%x\n", channel, note, velocity);
-#endif
 }
